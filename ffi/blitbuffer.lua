@@ -1912,6 +1912,186 @@ function BB_mt.__index:paintRoundedRect(x, y, w, h, c, r)
 end
 
 
+-- function BB_mt.__index:paintCubicSplineInterpolation(x, y, width)
+
+-- end
+
+
+--[[
+Bresenham‘s line algorithm to Draw a line 
+
+@x1:  start point in x axis
+@y1:  start point in y axis
+@x2:  end point in x axis
+@y2:  end point in y axis
+@c:   color of the line
+@t:   thickness of the line
+--]]
+-- function BB_mt.__index:paintLine(x1, y1, x2, y2, c, t)
+--     x1, y1 = ceil(x1), ceil(y1)
+--     x2, y2 = ceil(x2), ceil(y2)
+
+--     local steep = math.abs(y2 - y1) > math.abs(x2 - x1)
+--     if steep then
+--         x1, y1 = y1, x1
+--         x2, y2 = y2, x2
+--     end
+
+--     -- if x1 > x2 then
+--     --     x1, x2 = x2, x1
+--     --     y1, y2 = y2, y1
+--     -- end
+
+--     local dx = x2 - x1
+--     local dy = math.abs(y2 - y1)
+--     local derror = dy / dx
+    
+--     -- local y_step = 1
+--     -- if y1 > y2 then
+--     --     y_step = -1       
+--     -- end
+
+--     local error = 0
+--     local tmp_y = y1
+
+--     for tmp_x = x1, x2+1, 1 do
+--         if steep then
+--             self:setPixelClamped(tmp_y, tmp_x, c)
+--         else
+--             self:setPixelClamped(tmp_x, tmp_y, c)
+--         end        
+--         error = error + derror
+--         if error >= 0.5 then
+--             -- tmp_y = tmp_y + y_step
+--             tmp_y = tmp_y + 1
+--             error = error - 1
+--         end
+--     end
+-- end
+
+function BB_mt.__index:paintLinePerp(x, y, dx, dy, c, width, x_step, y_step, einit, winit)
+    local steep = math.abs(dy) > math.abs(dx)
+    if steep then
+        x, y = y, x
+        dx, dy = dy, dx
+    end
+
+    local thres = dx - 2 * dy
+    local e_diag = -2 * dx
+    local e_square = 2 * dy
+    local wthr = 2 * width * math.sqrt(dx * dx + dy * dy)
+
+    local tmp_x, tmp_y = x, y
+    local error = einit
+    local tk = dx + dy - winit
+    
+    while tk <= wthr do
+        if steep then
+            self:setPixelClamped(tmp_y, tmp_x, c)
+        else
+            self:setPixelClamped(tmp_x, tmp_y, c)
+        end
+
+        if error > thres then
+            tmp_x = tmp_x + x_step
+            error = error + e_diag
+            tk = tk + 2 * dy
+        end
+        error = error + e_square
+        tmp_y = tmp_y + y_step
+        tk = tk + 2 * dx
+    end
+
+    tmp_x, tmp_y = x, y
+    error = -einit
+    tk = dx + dy + winit
+
+    while tk <= wthr do
+        if steep then
+            self:setPixelClamped(tmp_y, tmp_x, c)
+        else
+            self:setPixelClamped(tmp_x, tmp_y, c)
+        end
+
+        if error > thres then
+            tmp_x = tmp_x - x_step
+            error = error + e_diag
+            tk = tk + 2 * dy
+        end
+        error = error + e_square
+        tmp_y = tmp_y - y_step
+        tk = tk + 2 * dx
+    end
+
+end
+
+function BB_mt.__index:paintLine(x1, y1, x2, y2, c, width)
+    x1, y1 = ceil(x1), ceil(y1)
+    x2, y2 = ceil(x2), ceil(y2)
+
+    local steep = math.abs(y2 - y1) > math.abs(x2 - x1)
+    if steep then
+        x1, y1 = y1, x1
+        x2, y2 = y2, x2
+    end
+
+    if x1 > x2 then
+        x1, x2 = x2, x1
+        y1, y2 = y2, y1
+    end
+
+    local dx = x2 - x1
+    local dy = y2 - y1
+
+    local y_step = 1
+    if dy < 0 then
+        y_step = -1
+        dy = -dy
+    end
+
+    local error = 0
+    local thres = dx - 2 * dy
+    local e_diag = -2 * dx
+    local e_square = 2 * dy
+
+    local px_step = -1
+    local py_step = -1
+    if y_step < 0 then
+        py_step = -1
+    else
+        py_step = 1
+    end
+
+    local p_error = 0
+    local tmp_y = y1
+    for tmp_x=x1, x2+1, 1 do
+        if steep then
+            self:setPixelClamped(tmp_y, tmp_x, c)
+            self:paintLinePerp(tmp_y, tmp_x, dy, dx, c, width, px_step, py_step, p_error, error)
+        else
+            self:setPixelClamped(tmp_x, tmp_y, c)
+            self:paintLinePerp(tmp_x, tmp_y, dx, dy, c, width, px_step, py_step, p_error, error)
+        end
+
+        if error >= thres then
+            tmp_y = tmp_y + y_step
+            error = error + e_diag
+            if p_error > thres then
+                if steep then
+                    self:paintLinePerp(tmp_y, tmp_x, dy, dx, c, width, px_step, py_step, p_error+e_diag+e_square, error)
+                else
+                    self:paintLinePerp(tmp_x, tmp_y, dx, dy, c, width, px_step, py_step, p_error+e_diag+e_square, error)
+                end
+                p_error = p_error + e_diag
+            end
+            p_error = p_error + e_square
+        end
+        error = error + e_square
+        tmp_x = tmp_x + 1
+    end
+end
+
+
 --[[
 Paint hatches in a rectangle
 
