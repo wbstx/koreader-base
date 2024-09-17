@@ -13,6 +13,10 @@ local C = ffi.C
 local floor = math.floor
 local ceil = math.ceil
 local min = math.min
+local max = math.max
+local function round(x)
+    return math.floor(x + 0.5)
+end
 local rshift = bit.rshift
 local lshift = bit.lshift
 local band = bit.band
@@ -1051,6 +1055,14 @@ function BB_mt.__index:setPixelClamped(x, y, color)
     end
 end
 
+function BB_mt.__index:setPixelClampedAA(x, y, color, weight)
+    local blend_color = color:getColor8A()
+    blend_color.alpha = min(255, max(0, weight))
+    if x >= 0 and x < self:getWidth() and y >= 0 and y < self:getHeight() then
+        self:setPixelBlend(x, y, blend_color)
+    end
+end
+
 -- functions for accessing dimensions
 function BB_mt.__index:getWidth()
     if 0 == band(1, self:getRotation()) then
@@ -1979,6 +1991,83 @@ function BB_mt.__index:paintCircle(center_x, center_y, r, c, w)
     end
 end
 
+-- function plotCircleAA(xm, ym, r)
+--     {                     /* draw a black anti-aliased circle on white background */
+--        var x = r, y = 0;            /* II. quadrant from bottom left to top right */
+--        var i, x2, e2, err = 2-2*r;                             /* error of 1.step */
+--        r = 1-err;
+--        for ( ; ; ) {
+--           i = 255*Math.abs(err+2*(x+y)-2)/r;          /* get blend value of pixel */
+--           setPixelAA(xm+x, ym-y, i);                             /*   I. Quadrant */
+--           setPixelAA(xm+y, ym+x, i);                             /*  II. Quadrant */
+--           setPixelAA(xm-x, ym+y, i);                             /* III. Quadrant */
+--           setPixelAA(xm-y, ym-x, i);                             /*  IV. Quadrant */
+--           if (x == 0) break;
+--           e2 = err; x2 = x;                                    /* remember values */
+--           if (err > y) {                                                /* x step */
+--              i = 255*(err+2*x-1)/r;                              /* outward pixel */
+--              if (i < 255) {
+--                 setPixelAA(xm+x, ym-y+1, i);
+--                 setPixelAA(xm+y-1, ym+x, i);
+--                 setPixelAA(xm-x, ym+y-1, i);
+--                 setPixelAA(xm-y+1, ym-x, i);
+--              }  
+--              err -= --x*2-1; 
+--           } 
+--           if (e2 <= x2--) {                                             /* y step */
+--              i = 255*(1-2*y-e2)/r;                                /* inward pixel */
+--              if (i < 255) {
+--                 setPixelAA(xm+x2, ym-y, i);
+--                 setPixelAA(xm+y, ym+x2, i);
+--                 setPixelAA(xm-x2, ym+y, i);
+--                 setPixelAA(xm-y, ym-x2, i);
+--              }  
+--              err -= --y*2-1; 
+--           } 
+--        }
+--     }
+
+function BB_mt.__index:paintCircleAA(center_x, center_y, r, c)
+    local x, y = r, 0
+    local i, x2, e2
+    local err = 2-2*r
+    r = 1-err
+    while true do
+        i = 255*math.abs(err+2*(x+y)-2)/r
+        self:setPixelClampedAA(center_x+x, center_y-y, c, 255-i)
+        self:setPixelClampedAA(center_x+y, center_y+x, c, 255-i)
+        self:setPixelClampedAA(center_x-x, center_y+y, c, 255-i)
+        self:setPixelClampedAA(center_x-y, center_y-x, c, 255-i)
+        if x == 0 then break end
+        e2, x2 = err, x
+        if err > y then
+            i = 255*(err+2*x-1)/r
+            if i < 255 then
+                self:setPixelClampedAA(center_x+x, center_y-y+1, c, 255-i)
+                self:setPixelClampedAA(center_x+y-1, center_y+x, c, 255-i)
+                self:setPixelClampedAA(center_x-x, center_y+y-1, c, 255-i)
+                self:setPixelClampedAA(center_x-y+1, center_y-x, c, 255-i)
+            end
+            x = x - 1
+            err = err - (x*2-1)
+        end
+        local x2_temp = x2
+        x2 = x2 - 1
+        if e2 <= x2_temp then
+            i = 255*(1-2*y-e2)/r
+            if i < 255 then
+                self:setPixelClampedAA(center_x+x2, center_y-y, c, 255-i)
+                self:setPixelClampedAA(center_x+y, center_y+x2, c, 255-i)
+                self:setPixelClampedAA(center_x-x2, center_y+y, c, 255-i)
+                self:setPixelClampedAA(center_x-y, center_y-x2, c, 255-i)
+            end
+            y = y - 1
+            err = err - (y*2-1)
+        end
+    end
+end
+
+
 function BB_mt.__index:paintRoundedCorner(off_x, off_y, w, h, bw, r, c, anti_alias)
     if 2*r > h or 2*r > w or r == 0 then
         -- no operation
@@ -2122,6 +2211,989 @@ function BB_mt.__index:paintRoundedRect(x, y, w, h, c, r)
     end
 end
 
+function BB_mt.__index:paintLinePerp(x, y, dx, dy, c, width, x_step, y_step, einit, winit)
+    local steep = math.abs(dy) > math.abs(dx)
+    if steep then
+        x, y = y, x
+        dx, dy = dy, dx
+    end
+
+    local thres = dx - 2 * dy
+    local e_diag = -2 * dx
+    local e_square = 2 * dy
+    local wthr = 2 * width * math.sqrt(dx * dx + dy * dy)
+
+    local tmp_x, tmp_y = x, y
+    local error = einit
+    local tk = dx + dy - winit
+    
+    while tk <= wthr do
+        if steep then
+            self:setPixelClamped(tmp_y, tmp_x, c)
+        else
+            self:setPixelClamped(tmp_x, tmp_y, c)
+        end
+
+        if error > thres then
+            tmp_x = tmp_x + x_step
+            error = error + e_diag
+            tk = tk + 2 * dy
+        end
+        error = error + e_square
+        tmp_y = tmp_y + y_step
+        tk = tk + 2 * dx
+    end
+
+    tmp_x, tmp_y = x, y
+    error = -einit
+    tk = dx + dy + winit
+
+    while tk <= wthr do
+        if steep then
+            self:setPixelClamped(tmp_y, tmp_x, c)
+        else
+            self:setPixelClamped(tmp_x, tmp_y, c)
+        end
+
+        if error > thres then
+            tmp_x = tmp_x - x_step
+            error = error + e_diag
+            tk = tk + 2 * dy
+        end
+        error = error + e_square
+        tmp_y = tmp_y - y_step
+        tk = tk + 2 * dx
+    end
+
+end
+
+--[[
+Bresenham‘s line algorithm to Draw a line with thickness
+Reference: https://zingl.github.io/bresenham.html & http://kt8216.unixcab.org/murphy/index.html
+
+@x1:  start point in x axis
+@y1:  start point in y axis
+@x2:  end point in x axis
+@y2:  end point in y axis
+@c:   color of the line
+@width:   thickness of the line
+--]]
+function BB_mt.__index:paintLineDirty(x1, y1, x2, y2, c, width)
+    x1, y1 = ceil(x1), ceil(y1)
+    x2, y2 = ceil(x2), ceil(y2)
+
+    local steep = math.abs(y2 - y1) > math.abs(x2 - x1)
+    if steep then
+        x1, y1 = y1, x1
+        x2, y2 = y2, x2
+    end
+
+    if x1 > x2 then
+        x1, x2 = x2, x1
+        y1, y2 = y2, y1
+    end
+
+    local dx = x2 - x1
+    local dy = y2 - y1
+
+    local y_step = 1
+    if dy < 0 then
+        y_step = -1
+        dy = -dy
+    end
+
+    local error = 0
+    local thres = dx - 2 * dy
+    local e_diag = -2 * dx
+    local e_square = 2 * dy
+
+    local px_step = -1
+    local py_step = -1
+    if y_step < 0 then
+        py_step = -1
+    else
+        py_step = 1
+    end
+
+    local p_error = 0
+    local tmp_y = y1
+    for tmp_x=x1, x2+1, 1 do
+        if steep then
+            self:setPixelClamped(tmp_y, tmp_x, c)
+            if width > 1 then
+                self:paintLinePerp(tmp_y, tmp_x, dy, dx, c, width, px_step, py_step, p_error, error)
+            end
+        else
+            self:setPixelClamped(tmp_x, tmp_y, c)
+            if width > 1 then
+                self:paintLinePerp(tmp_x, tmp_y, dx, dy, c, width, px_step, py_step, p_error, error)
+            end
+        end
+
+        if error >= thres then
+            tmp_y = tmp_y + y_step
+            error = error + e_diag
+            if width > 1 then
+                if p_error > thres then
+                    if steep then
+                        self:paintLinePerp(tmp_y, tmp_x, dy, dx, c, width, px_step, py_step, p_error+e_diag+e_square, error)
+                    else
+                        self:paintLinePerp(tmp_x, tmp_y, dx, dy, c, width, px_step, py_step, p_error+e_diag+e_square, error)
+                    end
+                    p_error = p_error + e_diag
+                end
+                p_error = p_error + e_square
+            end
+        end
+            error = error + e_square
+        tmp_x = tmp_x + 1
+    end
+end
+
+function BB_mt.__index:paintLine(x0, y0, x1, y1, c)
+    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    local dx = math.abs(x1-x0)
+    local sx = x0<x1 and 1 or -1
+    local dy = -math.abs(y1-y0)
+    local sy = y0<y1 and 1 or -1
+    local err = dx+dy
+    local e2
+    while true do
+        self:setPixelClamped(x0, y0, c)
+        if x0 == x1 and y0 == y1 then break end
+        e2 = 2*err
+        if e2 >= dy then
+            err = err + dy
+            x0 = x0 + sx
+        end
+        if e2 <= dx then
+            err = err + dx
+            y0 = y0 + sy
+        end
+    end
+end
+
+function BB_mt.__index:paintLineAA(x0, y0, x1, y1, c)
+    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    local dx = math.abs(x1-x0)
+    local sx = x0 < x1 and 1 or -1
+    local dy = math.abs(y1-y0)
+    local sy = y0 < y1 and 1 or -1
+    local err = dx-dy
+    local e2, x2
+    local ed = dx+dy == 0 and 1 or math.sqrt(dx*dx+dy*dy)
+
+    while true do
+        self:setPixelClampedAA(x0, y0, c, 255-255*math.abs(err-dx+dy)/ed)
+        e2 = err
+        x2 = x0
+        if 2*e2 >= -dx then
+            if x0 == x1 then break end
+            if e2+dy < ed then
+                self:setPixelClampedAA(x0, y0+sy, c, 255-255*(e2+dy)/ed)
+            end
+            err = err - dy
+            x0 = x0 + sx
+        end
+        if 2*e2 <= dy then
+            if y0 == y1 then break end
+            if dx-e2 < ed then
+                self:setPixelClampedAA(x2+sx, y0, c, 255-255*(dx-e2)/ed)
+            end
+            err = err + dx
+            y0 = y0 + sy
+        end
+    end
+end
+
+function BB_mt.__index:paintLineWidth(x0, y0, x1, y1, c, w)
+    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    local dx = math.abs(x1-x0)
+    local sx = x0 < x1 and 1 or -1
+    local dy = math.abs(y1-y0)
+    local sy = y0 < y1 and 1 or -1
+    local err
+    local e2 = math.sqrt(dx*dx+dy*dy)
+
+    print(w, e2)
+    if w <= 1 or e2 == 0 then
+        self:paintLineAA(x0, y0, x1, y1, c)
+        return
+    end
+
+    dx = dx * 255 / e2
+    dy = dy * 255 / e2
+    w = 255 * (w - 1)
+
+    if dx < dy then
+        x1 = round((e2+w/2)/dy)
+        err = x1 * dy - w/2
+        x0 = x0 - x1 * sx
+        while true do
+            x1 = x0
+            self:setPixelClampedAA(x1, y0, c, 255-err)
+            e2 = dy - err - w
+            while e2 + dy < 255 do
+                x1 = x1 + sx
+                self:setPixelClamped(x1, y0, c)
+                e2 = e2 + dy
+            end
+            self:setPixelClampedAA(x1+sx, y0, c, 255-e2)
+            if y0 == y1 then break end
+            err = err + dx
+            if err > 255 then
+                err = err - dy
+                x0 = x0 + sx
+            end
+            y0 = y0 + sy
+        end
+    else
+        y1 = round((e2+w/2)/dx)
+        err = y1 * dx - w/2
+        y0 = y0 - y1 * sy
+        while true do
+            y1 = y0
+            self:setPixelClampedAA(x0, y1, c, 255-err)
+            e2 = dx - err - w
+            while e2 + dx < 255 do
+                y1 = y1 + sy
+                self:setPixelClamped(x0, y1, c)
+                e2 = e2 + dx
+            end
+            self:setPixelClampedAA(x0, y1+sy, c, 255-e2)
+            if x0 == x1 then break end
+            err = err + dy
+            if err > 255 then
+                err = err - dx
+                y0 = y0 + sy
+            end
+            x0 = x0 + sx
+        end
+    end
+end
+
+function BB_mt.__index:paintQuadRationalBezierWidthSeg(x0, y0, x1, y1, x2, y2, c, weight, width)
+    x0, y0, x1, y1, x2, y2 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2)
+    local sx, sy = x2-x1, y2-y1
+    local dx, dy = x0-x2, y0-y2
+    local xx, yy = x0-x1, y0-y1
+    local xy = xx*sy+yy*sx
+    local cur = xx*sy-yy*sx
+    local err, e2, ed
+    if xx*sx > 0 or yy*sy > 0 then return end
+    local direct_return = false
+
+    if cur ~= 0 and weight > 0 then
+        if sx*sx+sy*sy > xx*xx+yy*yy then
+            x2 = x0
+            x0 = x0 - dx
+            y2 = y0
+            y0 = y0 - dy
+            cur = -cur
+        end
+        xx = 2*(4*weight*sx*xx+dx*dx)
+        yy = 2*(4*weight*sy*yy+dy*dy)
+        sx = x0 < x2 and 1 or -1
+        sy = y0 < y2 and 1 or -1
+        xy = -2*sx*sy*(2*weight*xy+dx*dy)
+
+        if cur*sx*sy < 0 then
+            xx, yy, cur, xy = -xx, -yy, -cur, -xy
+        end
+        dx = 4*weight*(x1-x0)*sy*cur+xx/2
+        dy = 4*weight*(y0-y1)*sx*cur+yy/2
+
+        if weight < 0.5 and (dx+xx <= 0 or dy+yy >= 0) then
+            cur = (weight+1)/2
+            weight = math.sqrt(weight)
+            xy = 1/(weight+1)
+            sx = math.floor((x0+2*weight*x1+x2)*xy/2+0.5)
+            sy = math.floor((y0+2*weight*y1+y2)*xy/2+0.5)
+            dx = math.floor((weight*x1+x0)*xy+0.5)
+            dy = math.floor((y1*weight+y0)*xy+0.5)
+            self:paintQuadRationalBezierWidthSeg(x0, y0, dx, dy, sx, sy, c, weight, width)
+            dx = math.floor((weight*x1+x2)*xy+0.5)
+            dy = math.floor((y1*weight+y2)*xy+0.5)
+            self:paintQuadRationalBezierWidthSeg(sx, sy, dx, dy, x2, y2, c, weight, width)
+            return
+        end
+
+        local function paintLoop()
+            err = 0
+            while dy+2*yy < 0 and dx+2*xx > 0 do
+                if dx+dy+xy < 0 then
+                    while dx+dy+xy < 0 do
+                        ed = -dy-2*dy*dx*dx/(4*dy*dy+dx*dx)
+                        weight = (width-1)*ed
+                        x1 = math.floor((err-ed-weight/2)/dy)
+                        e2 = err-x1*dy-weight/2
+                        x1 = x0-x1*sx
+                        -- self:setPixelClamped(x1, y0, anti_alias_color_white(c, 1.-e2/ed))
+                        self:setPixelClampedAA(x1, y0, c, 255*(1.-e2/ed))
+                        e2 = -weight-dy-e2
+                        while e2-dy < ed do
+                            x1 = x1 + sx
+                            self:setPixelClamped(x1, y0, c)
+                            e2 = e2 - dy
+                        end
+                        -- self:setPixelClamped(x1+sx, y0, anti_alias_color_white(c, 1.-e2/ed))
+                        self:setPixelClampedAA(x1+sx, y0, c, 255*(1.-e2/ed))
+                        if y0 == y2 then return true end
+                        y0 = y0 + sy
+                        dy = dy + xy
+                        err = err + dx
+                        dx = dx + xx
+                        if 2*err+dy > 0 then
+                            x0 = x0 + sx
+                            dx = dx + xy
+                            err = err + dy
+                            dy = dy + yy
+                        end
+                        if x0 ~= x2 and (dx+2*xx <= 0 or dy+2*yy >= 0) then
+                            if math.abs(y2-y0) > math.abs(x2-x0) then 
+                                return false
+                            else
+                                break
+                            end
+                        end
+                    end
+
+                    cur = err-dy-weight/2
+                    y1 = y0
+                    while cur < ed do
+                        e2 = cur
+                        x1 = x0
+                        while e2-dy < ed do
+                            x1 = x1 - sx
+                            self:setPixelClamped(x1, y1, c)
+                            e2 = e2 - dy
+                        end
+                        -- self:setPixelClamped(x1-sx, y1, anti_alias_color_white(c, 1.-e2/ed))
+                        self:setPixelClampedAA(x1-sx, y1, c, 255*(1.-e2/ed))
+                        y1 = y1 + sy
+                        cur = cur + dx
+                    end
+                else
+                    while dx + dy + xy >= 0 do
+                        ed = dx + 2 * dx * dy * dy / (4 * dx * dx + dy * dy)
+                        weight = (width-1) * ed
+                        y1 = math.floor((err+ed+weight/2)/dx)
+                        e2 = y1*dx-weight/2-err
+                        y1 = y0-y1*sy
+                        -- self:setPixelClamped(x0, y1, anti_alias_color_white(c, 1.-e2/ed))
+                        self:setPixelClampedAA(x0, y1, c, 255*(1.-e2/ed))
+                        e2 = dx-e2-weight
+                        while e2+dx < ed do
+                            y1 = y1 + sy
+                            self:setPixelClamped(x0, y1, c)
+                            e2 = e2 + dx
+                        end
+                        -- self:setPixelClamped(x0, y1+sy, anti_alias_color_white(c, 1.-e2/ed))
+                        self:setPixelClampedAA(x0, y1+sy, c, 255*(1.-e2/ed))
+                        if x0 == x2 then return true end
+                        x0 = x0 + sx
+                        dx = dx + xy
+                        err = err + dy
+                        dy = dy + yy
+                        if 2*err+dx < 0 then
+                            y0 = y0 + sy
+                            dy = dy + xy
+                            err = err + dx
+                            dx = dx + xx
+                        end
+                        if y0 ~= y2 and (dx+2*xx <= 0 or dy+2*yy >= 0) then
+                            if math.abs(y2-y0) <= math.abs(x2-x0) then
+                                return false
+                            else
+                                break
+                            end
+                        end
+                    end
+
+                    cur = -err+dx-weight/2
+                    x1 = x0
+                    while cur < ed do
+                        e2 = cur
+                        y1 = y0
+                        while e2+dx < ed do
+                            y1 = y1 - sy
+                            self:setPixelClamped(x1, y1, c)
+                            e2 = e2 + dx
+                        end
+                        -- self:setPixelClamped(x1, y1-sy, anti_alias_color_white(c, 1.-e2/ed))
+                        self:setPixelClampedAA(x1, y1-sy, c, 255*(1.-e2/ed))
+                        x1 = x1 + sx
+                        cur = cur - dy
+                    end
+                end         
+            end
+        end
+
+        direct_return = paintLoop()
+    end
+
+    if not direct_return then
+        self:paintLineWidth(x0, y0, x2, y2, c, width)
+    end
+end
+
+function BB_mt.__index:paintQuadRationalBezierWidth(x0, y0, x1, y1, x2, y2, c, weight, width)
+    x0, y0, x1, y1, x2, y2 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2)
+    local x, y = x0-2*x1+x2, y0-2*y1+y2
+    local xx, yy = x0-x1, y0-y1
+    local ww, t, q
+    if weight < 0 then return end
+
+    if xx*(x2-x1) > 0 then
+        if yy*(y2-y1) > 0 then
+            if math.abs(xx*y) > math.abs(yy*x) then
+                x0, x2 = x2, xx+x1
+                y0, y2 = y2, yy+y1
+            end
+        end
+
+        if x0 == x2 or weight == 1 then
+            t = (x0-x1)/x
+        else
+            q = math.sqrt(4*weight*weight*(x0-x1)*(x2-x1)+(x2-x0)*(x2-x0))
+            if x1 < x0 then q = -q end
+            t = (2*weight*(x0-x1)-x0+x2+q)/(2*(1-weight)*(x2-x0))
+        end
+        q = 1/(2*t*(1-t)*(weight-1)+1)
+        xx = (t*t*(x0-2*weight*x1+x2)+2*t*(weight*x1-x0)+x0)*q
+        yy = (t*t*(y0-2*weight*y1+y2)+2*t*(weight*y1-y0)+y0)*q
+        ww = t*(weight-1)+1
+        ww = ww * ww * q
+        weight = ((1-t)*(weight-1)+1)*math.sqrt(q)
+        x = round(xx)
+        y = round(yy)
+        yy = (xx-x0)*(y1-y0)/(x1-x0)+y0
+        self:paintQuadRationalBezierWidthSeg(x0, y0, x, round(yy), x, y, c, ww, width)
+        yy = (xx-x2)*(y1-y2)/(x1-x2)+y2
+        y1 = round(yy)
+        x1 = x
+        x0 = x1
+        y0 = y
+    end
+
+    if (y0-y1)*(y2-y1) > 0 then
+        if y0 == y2 or weight == 1 then
+            t = (y0-y1)/(y0-2*y1+y2)
+        else
+            q = math.sqrt(4*weight*weight*(y0-y1)*(y2-y1)+(y2-y0)*(y2-y0))
+            if y1 < y0 then q = -q end
+            t = (2*weight*(y0-y1)-y0+y2+q)/(2*(1-weight)*(y2-y0))
+        end
+        q = 1/(2*t*(1-t)*(weight-1)+1)
+        xx = (t*t*(x0-2*weight*x1+x2)+2*t*(weight*x1-x0)+x0)*q
+        yy = (t*t*(y0-2*weight*y1+y2)+2*t*(weight*y1-y0)+y0)*q
+        ww = t*(weight-1)+1
+        ww = ww * ww * q
+        weight = ((1-t)*(weight-1)+1)*math.sqrt(q)
+        x = round(xx)
+        y = round(yy)
+        xx = (x1-x0)*(yy-y0)/(y1-y0)+x0
+        self:paintQuadRationalBezierWidthSeg(x0, y0, round(xx), y, x, y, c, ww, width)
+        xx = (x1-x2)*(yy-y2)/(y1-y2)+x2
+        x1 = round(xx)
+        x0 = x
+        y1 = y
+        y0 = y
+    end
+
+    self:paintQuadRationalBezierWidthSeg(x0, y0, x1, y1, x2, y2, c, weight*weight, width)
+end
+
+function BB_mt.__index:paintCubicBezierSegWidth(x0, y0, x1, y1, x2, y2, x3, y3, c, width)
+    x0, y0, x1, y1, x2, y2, x3, y3 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2), round(x3), round(y3)
+    local x = math.floor((x0+3*x1+3*x2+x3+4)/8)
+    local y = math.floor((y0+3*y1+3*y2+y3+4)/8)
+    self:paintQuadRationalBezierWidthSeg(x0, y0, math.floor((x0+3*x1+2)/4), math.floor((y0+3*y1+2)/4), x, y, c, 1, width)
+    self:paintQuadRationalBezierWidthSeg(x, y, math.floor((3*x2+x3+2)/4), math.floor((3*y2+y3+2)/4), x3, y3, c, 1, width)
+end
+
+function BB_mt.__index:paintCubicBezierWidth(x0, y0, x1, y1, x2, y2, x3, y3, c, width)
+    x0, y0, x1, y1, x2, y2, x3, y3 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2), round(x3), round(y3)
+    local n, i = 1, 0
+    local xc = x0+x1-x2-x3
+    local xa = xc-4*(x1-x2)
+    local xb = x0-x1-x2+x3
+    local xd = xb+4*(x1+x2)
+    local yc = y0+y1-y2-y3
+    local ya = yc-4*(y1-y2)
+    local yb = y0-y1-y2+y3
+    local yd = yb+4*(y1+y2)
+    local fx0 = x0
+    local fx1, fx2, fx3
+    local fy0 = y0
+    local fy1, fy2, fy3
+    local t1 = xb*xb-xa*xc
+    local t2
+    local t = {}
+
+    if xa == 0 then
+        if math.abs(xc) < 2*math.abs(xb) then
+            t[n] = xc/(2.0*xb)
+            n = n + 1
+        end
+    elseif t1 > 0 then
+        t2 = math.sqrt(t1)
+        t1 = (xb-t2)/xa
+        if math.abs(t1) < 1.0 then
+            t[n] = t1
+            n = n + 1
+        end
+        t1 = (xb+t2)/xa
+        if math.abs(t1) < 1.0 then
+            t[n] = t1
+            n = n + 1
+        end
+    end
+
+    local t1 = yb*yb-ya*yc
+    if ya == 0 then
+        if math.abs(yc) < 2*math.abs(yb) then
+            t[n] = yc/(2.0*yb)
+            n = n + 1
+        end
+    elseif t1 > 0 then
+        t2 = math.sqrt(t1)
+        t1 = (yb-t2)/ya
+        if math.abs(t1) < 1.0 then
+            t[n] = t1
+            n = n + 1
+        end
+        t1 = (yb+t2)/ya
+        if math.abs(t1) < 1.0 then
+            t[n] = t1
+            n = n + 1
+        end
+    end
+
+    t1 = 2 * (xa * yb - xb * ya)
+    t2 = xa * yc - xc * ya
+    i = t2 * t2 - 2 * t1 * (xb * yc - xc * yb)
+    if i > 0 then
+        i = math.sqrt(i)
+        t[n] = (t2+i)/t1
+        if math.abs(t[n]) < 1.0 then
+            n = n + 1
+        end
+        t[n] = (t2-i)/t1
+        if math.abs(t[n]) < 1.0 then
+            n = n + 1
+        end
+    end
+
+    for i = 2, n-1 do
+        t1 = t[i-1]
+        if t1 > t[i] then
+            t[i-1], t[i] = t[i], t[i-1]
+            i = 0
+        end
+    end
+
+    t1 = -1.0
+    t[n] = 1.0
+    for i = 1, n do
+        t2 = t[i]
+        fx1 = (t1*(t1*xb-2*xc)-t2*(t1*(t1*xa-2*xb)+xc)+xd)/8-fx0
+        fy1 = (t1*(t1*yb-2*yc)-t2*(t1*(t1*ya-2*yb)+yc)+yd)/8-fy0
+        fx2 = (t2*(t2*xb-2*xc)-t1*(t2*(t2*xa-2*xb)+xc)+xd)/8-fx0
+        fy2 = (t2*(t2*yb-2*yc)-t1*(t2*(t2*ya-2*yb)+yc)+yd)/8-fy0
+        fx3 = (t2*(t2*(3*xb-t2*xa)-3*xc)+xd)/8
+        fx0 = fx0 - fx3
+        fy3 = (t2*(t2*(3*yb-t2*ya)-3*yc)+yd)/8
+        fy0 = fy0 - fy3
+        x3 = round(fx3+0.5)
+        y3 = round(fy3+0.5)
+        if fx0 ~= 0.0 then
+            fx0 = (x0-x3)/fx0
+            fx1 = fx1 * fx0
+            fx2 = fx2 * fx0
+        end
+        if fy0 ~= 0.0 then
+            fy0 = (y0-y3)/fy0
+            fy1 = fy1 * fy0
+            fy2 = fy2 * fy0
+        end
+        if x0 ~= x3 or y0 ~= y3 then
+            self:paintCubicBezierSegWidth(x0, y0, x0+fx1, y0+fy1, x0+fx2, y0+fy2, x3, y3, c, width)
+        end
+        x0, y0, fx0, fy0, t1 = x3, y3, fx3, fy3, t2
+    end
+end
+
+--[[
+Bresenham‘s line algorithm to Draw a line with thickness
+Reference: https://zingl.github.io/bresenham.html & http://kt8216.unixcab.org/murphy/index.html
+
+@x1:  start point in x axis
+@y1:  start point in y axis
+@x2:  end point in x axis
+@y2:  end point in y axis
+@c:   color of the line
+@width:   thickness of the line
+--]]
+function BB_mt.__index:paintLine2(x1, y1, x2, y2, c, width)
+    x1, y1, x2, y2 = ceil(x1), ceil(y1), ceil(x2), ceil(y2)
+
+    local dx = math.abs(x2-x1)
+    local dy = math.abs(y2-y1)
+
+    local x_step = x1 > x2 and -1 or 1
+    local y_step = y1 > y2 and -1 or 1
+
+    local error = dx - dy
+    local error_temp = 0
+    local x_temp, y_temp
+    local ed = 1
+    if dx + dy ~= 0 then
+        ed = math.sqrt(dx*dx+dy*dy)
+    end
+
+    width = (width + 1) / 2
+    while true do
+        self:setPixelClamped(x1, y1, Color8(math.max(0, c.a * math.abs(error-dx+dy)/ed-width+1)))
+        error_temp = error
+        x_temp = x1
+        if (2 * error_temp >= -dx) then
+            y_temp = y1
+            for error_temp = error_temp + dy, ed * width, dx do
+                if (y1 ~= y_temp) or (dx > dy) then
+                    self:setPixelClamped(x1, y_temp + y_step, Color8(math.max(0, c.a*(math.abs(error_temp)/ed-width+1))))
+                    y_temp = y_temp + y_step
+                else
+                    break
+                end
+            end
+            if x1 == x2 then
+                break
+            end
+            error_temp = error
+            error = error - dy
+            x1 = x1 + x_step
+        end
+
+        if (2 * error_temp <= dy) then
+            error_temp = dx - error_temp
+            for error_temp = dx - error_temp, ed * width, dy do
+                if (x1 ~= x_temp) or (dx < dy) then
+                    self:setPixelClamped(x_temp + x_step, y1, Color8(math.max(0, c.a*(math.abs(error_temp)/ed-width+1))))
+                    x_temp = x_temp + x_step
+                else
+                    break
+                end
+            end
+            if y1 == y2 then
+                break
+            end
+            error = error + dx
+            y1 = y1 + y_step
+        end
+    end
+end
+
+function BB_mt.__index:paintQuadBezierSeg(x0, y0, x1, y1, x2, y2, c, w)
+    local sx, sy = x2-x1, y2-y1
+    local xx, yy = x0-x1, y0-y1
+    local xy, dx, dy, err
+    local cur = xx*sy-yy*sx
+
+    if (xx * sx > 0) or (yy * sy > 0) then
+        return
+    end
+    -- assert(xx*sx <= 0 and yy*sy <= 0)
+
+    if (sx*sx + sy*sy) > (xx*xx + yy*yy) then
+        x2 = x0
+        x0 = sx + x1
+        y2 = y0
+        y0 = sy + y1
+        cur = -cur
+    end
+
+    if cur ~= 0 then
+        xx = xx + sx
+        sx = (x0 < x2) and 1 or -1
+        xx = xx * sx
+
+        yy = yy + sy
+        sy = (y0 < y2) and 1 or -1
+        yy = yy * sy
+
+        xy = 2 * xx * yy
+        xx = xx * xx
+        yy = yy * yy
+
+        if cur * sx * sy < 0 then
+            xx = -xx; yy = -yy; xy = -xy; cur = -cur
+        end
+        dx = 4.0 * sy * cur * (x1 - x0) + xx - xy
+        dy = 4.0 * sx * cur * (y0 - y1) + yy - xy
+        xx, yy, err = xx + xx, yy + yy, dx + dy + xy
+        while dy < 0 and dx > 0 do
+            self:setPixelClamped(x0, y0, c);
+            if (x0 == x2) and (y0 == y2) then return end
+            y1 = 2 * err < dx
+
+            if (2 * err > dy) then
+                x0 = x0 + sx; dx = dx - xy; dy = dy + yy
+                err = err + dy
+            end
+
+            if y1 then
+                y0 = y0 + sy; dy = dy - xy; dx = dx + xx
+                err = err + dx
+            end
+        end
+    end
+    self:paintLine(x0, y0, x2, y2, c)
+end
+
+function BB_mt.__index:paintQuadBezier(x0, y0, x1, y1, x2, y2, c, w)
+    x0, y0, x1, y1, x2, y2 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2)
+
+    local x = x0-x1
+    local y = y0-y1
+    local t = x0-2*x1+x2
+    local r
+
+    if x * (x2 - x1) > 0 then
+        if y * (y2 - y1) > 0 then
+            if math.abs((y0-2*y1+y2)/t*x) > math.abs(y) then
+                x0 = x2
+                x2 = x+x1
+                y0 = y2
+                y2 = y+y1
+            end
+        end
+        t = (x0-x1)/t
+        r = (1-t)*((1-t)*y0+2.0*t*y1)+t*t*y2
+        t = (x0*x2-x1*x1)*t/(x0-x1)
+        x = math.floor(t+0.5); y = math.floor(r+0.5);
+        r = (y1-y0)*(t-x0)/(x1-x0)+y0
+        self:paintQuadBezierSeg(x0,y0, x, math.floor(r+0.5), x,y, c, w);
+        r = (y1-y2)*(t-x2)/(x1-x2)+y2;
+        x0 = x
+        x1 = x
+        y0 = y
+        y1 = math.floor(r+0.5)
+    end
+
+    if ((y0-y1)*(y2-y1) > 0) then
+        t = y0-2*y1+y2
+        t = (y0-y1)/t
+        r = (1-t)*((1-t)*x0+2.0*t*x1)+t*t*x2
+        t = (y0*y2-y1*y1)*t/(y0-y1)
+        x = math.floor(r+0.5); y = math.floor(t+0.5)
+        r = (x1-x0)*(t-y0)/(y1-y0)+x0
+        self:paintQuadBezierSeg(x0,y0, math.floor(r+0.5),y, x,y, c, w);
+        r = (x1-x2)*(t-y2)/(y1-y2)+x2
+        x0 = x
+        x1 = math.floor(r+0.5)
+        y0 = y
+        y1 = y
+    end
+
+    self:paintQuadBezierSeg(x0,y0, x1,y1, x2,y2, c, w)
+end
+
+function BB_mt.__index:paintCubicBezierSeg(x0, y0, x1, y1, x2, y2, x3, y3, c, w)
+    local f, fx, fy
+    local leg = 1
+    local sx = x0 < x3 and 1 or -1
+    local sy = y0 < y3 and 1 or -1 -- step direction
+    local xc = -math.abs(x0+x1-x2-x3)
+    local xa, xb = xc-4*sx*(x1-x2), sx*(x0-x1-x2+x3)
+    local yc = -math.abs(y0+y1-y2-y3)
+    local ya, yb = yc-4*sy*(y1-y2), sy*(y0-y1-y2+y3)
+    local ab, ac, bc, cb, xx, xy, yy, dx, dy, ex, pxy
+    local EP = 0.01
+
+    assert((x1-x0)*(x2-x3) < EP and ((x3-x0)*(x1-x2) < EP or xb*xb < xa*xc+EP))
+    assert((y1-y0)*(y2-y3) < EP and ((y3-y0)*(y1-y2) < EP or yb*yb < ya*yc+EP))
+
+    if xa == 0 and ya == 0 then
+        self:paintQuadBezierSeg(x0, y0, (3 * x1 - x0) / 2, (3 * y1 - y0) / 2, x3, y3)
+        return
+    end
+
+    x1 = (x1-x0)*(x1-x0)+(y1-y0)*(y1-y0)+1
+    x2 = (x2-x3)*(x2-x3)+(y2-y3)*(y2-y3)+1
+
+    while leg > 0 do
+        ab = xa*yb-xb*ya; ac = xa*yc-xc*ya; bc = xb*yc-xc*yb;
+        ex = ab*(ab+ac-3*bc)+ac*ac
+        f = ex > 0 and 1 or math.floor(math.sqrt(1+1024/x1))
+        ab = ab * f; ac = ac * f; bc = bc * f; ex = ex * f * f
+        xy = 9*(ab+ac+bc)/8; cb = 8*(xa-ya)
+        dx = 27*(8*ab*(yb*yb-ya*yc)+ex*(ya+2*yb+yc))/64-ya*ya*(xy-ya)
+        dy = 27*(8*ab*(xb*xb-xa*xc)-ex*(xa+2*xb+xc))/64-xa*xa*(xy+xa)
+        xx = 3*(3*ab*(3*yb*yb-ya*ya-2*ya*yc)-ya*(3*ac*(ya+yb)+ya*cb))/4;
+        yy = 3*(3*ab*(3*xb*xb-xa*xa-2*xa*xc)-xa*(3*ac*(xa+xb)+xa*cb))/4;
+        xy = xa*ya*(6*ab+6*ac-3*bc+cb); ac = ya*ya; cb = xa*xa;
+        xy = 3*(xy+9*f*(cb*yb*yc-xb*xc*ac)-18*xb*yb*ab)/8;
+
+        if ex < 0 then
+            dx = -dx; dy = -dy; xx = -xx; yy = -yy; xy = -xy; ac = -ac; cb = -cb
+        end
+        ab = 6*ya*ac; ac = -6*xa*ac; bc = 6*ya*cb; cb = -6*xa*cb
+        dx = dx + xy; ex = dx+dy; dy = dy + xy
+
+        local function paintLoop()
+            pxy = 0
+            fx, fy = f, f
+            while x0 ~= x3 and y0 ~= y3 do
+                self:setPixelClamped(x0, y0, c);
+                while fx > 0 and fy > 0 do
+                    if pxy == 0 and (dx > xy or dy < xy) then return end
+                    if pxy == 1 and (dx > 0 or dy < 0) then return end
+                    y1 = 2*ex-dy
+                    if (2*ex >= dx) then
+                        fx = fx - 1
+                        dx = dx + xx
+                        ex = ex + dx
+                        xy = xy + ac
+                        dy = dy + xy
+                        yy = yy + bc
+                        xx = xx + ab
+                    elseif y1 > 0 then
+                        return
+                    end
+
+                    if y1 <= 0 then
+                        fy = fy - 1
+                        dy = dy + yy
+                        ex = ex + dy
+                        xy = xy + bc
+                        dx = dx + xy
+                        xx = xx + ac
+                        yy = yy + cb
+                    end
+                end
+                
+                if (2*fx <= f) then 
+                    x0 = x0 + sx
+                    fx = fx + f
+                end
+                if (2*fy <= f) then
+                    y0 = y0 + sy
+                    fy = fy + f
+                end 
+                if (pxy == 0 and dx < 0 and dy > 0) then
+                    pxy = 1
+                end
+            end
+            xx = x0; x0 = x3; x3 = xx; sx = -sx; xb = -xb;
+            yy = y0; y0 = y3; y3 = yy; sy = -sy; yb = -yb; x1 = x2;
+        end
+
+        paintLoop()
+        leg = leg - 1
+    end
+    self:paintLine(x0, y0, x3, y3, c)
+end
+
+function BB_mt.__index:paintCubicBezier(x0, y0, x1, y1, x2, y2, x3, y3, c, w)
+    x0, y0, x1, y1, x2, y2, x3, y3 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2), round(x3), round(y3)
+    local n, i = 1, 0
+    local xc = x0+x1-x2-x3
+    local xa = xc-4*(x1-x2)
+    local xb = x0-x1-x2+x3
+    local xd = xb+4*(x1+x2)
+    local yc = y0+y1-y2-y3
+    local ya = yc-4*(y1-y2)
+    local yb = y0-y1-y2+y3
+    local yd = yb+4*(y1+y2)
+    local fx0 = x0
+    local fx1, fx2, fx3
+    local fy0 = y0
+    local fy1, fy2, fy3
+    local t1 = xb*xb-xa*xc
+    local t2
+    local t = {}
+
+    if (xa == 0) then
+        if math.abs(xc) < 2 * math.abs(xb) then
+            t[n] = xc / (2.0 * xb)
+            n = n + 1
+        end
+    elseif t1 > 0.0 then
+        t2 = math.sqrt(t1);
+        t1 = (xb-t2)/xa
+        if (math.abs(t1) < 1.0) then 
+            t[n] = t1;
+            n = n + 1
+        end
+        t1 = (xb+t2)/xa
+        if (math.abs(t1) < 1.0) then 
+            t[n] = t1;
+            n = n + 1
+        end
+    end
+    t1 = yb*yb-ya*yc;
+
+    if (ya == 0) then
+        if math.abs(yc) < 2*math.abs(yb) then
+            t[n] = yc/(2.0*yb)
+            n = n + 1
+        end
+    elseif t1 > 0.0 then
+        t2 = math.sqrt(t1)
+        t1 = (yb-t2)/ya
+        if math.abs(t1) < 1.0 then
+            t[n] = t1;
+            n = n + 1
+        end 
+        t1 = (yb+t2)/ya
+        if math.abs(t1) < 1.0 then
+            t[n] = t1;
+            n = n + 1
+        end
+    end
+
+    -- bubble sort of 4 points
+    for i = 2, n-1 do
+        if t[i] < t[i - 1] then
+            t[i - 1], t[i] = t[i], t[i - 1]
+            i = 1
+        end
+    end
+
+    t1 = -1.0; t[n] = 1.0;
+    for i = 1, n do
+        t2 = t[i]
+        fx1 = (t1*(t1*xb-2*xc)-t2*(t1*(t1*xa-2*xb)+xc)+xd)/8-fx0
+        fy1 = (t1*(t1*yb-2*yc)-t2*(t1*(t1*ya-2*yb)+yc)+yd)/8-fy0
+        fx2 = (t2*(t2*xb-2*xc)-t1*(t2*(t2*xa-2*xb)+xc)+xd)/8-fx0
+        fy2 = (t2*(t2*yb-2*yc)-t1*(t2*(t2*ya-2*yb)+yc)+yd)/8-fy0
+        fx3 = (t2*(t2*(3*xb-t2*xa)-3*xc)+xd)/8
+        fx0 = fx0 - fx3
+        fy3 = (t2*(t2*(3*yb-t2*ya)-3*yc)+yd)/8
+        fy0 = fy0 - fy3
+        x3 = math.floor(fx3+0.5)
+        y3 = math.floor(fy3+0.5)
+        if fx0 ~= 0.0 then
+            fx0 = (x0 - x3) / fx0
+            fx1 = fx1 * fx0
+            fx2 = fx2 * fx0
+        end
+        if fy0 ~= 0.0 then
+            fy0 = (y0 - y3) / fy0
+            fy1 = fy1 * fy0
+            fy2 = fy2 * fy0
+        end
+        if x0 ~= x3 or y0 ~= y3 then
+            self:paintCubicBezierSeg(x0, y0, x0+fx1, y0+fy1, x0+fx2, y0+fy2, x3, y3, c, w)
+        end
+        x0 = x3
+        y0 = y3
+        fx0 = fx3
+        fy0 = fy3
+        t1 = t2
+    end
+end
 
 --[[
 Paint hatches in a rectangle
