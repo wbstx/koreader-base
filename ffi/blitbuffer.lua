@@ -2027,46 +2027,266 @@ end
 --        }
 --     }
 
-function BB_mt.__index:paintCircleAA(center_x, center_y, r, c)
-    local x, y = r, 0
-    local i, x2, e2
-    local err = 2-2*r
-    r = 1-err
+-- function BB_mt.__index:paintCircleAA(center_x, center_y, r, c)
+--     local x, y = r, 0
+--     local i, x2, e2
+--     local err = 2-2*r
+--     r = 1-err
+--     while true do
+--         i = 255*math.abs(err+2*(x+y)-2)/r
+--         self:setPixelClampedAA(center_x+x, center_y-y, c, 255-i)
+--         self:setPixelClampedAA(center_x+y, center_y+x, c, 255-i)
+--         self:setPixelClampedAA(center_x-x, center_y+y, c, 255-i)
+--         self:setPixelClampedAA(center_x-y, center_y-x, c, 255-i)
+--         if x == 0 then break end
+--         e2, x2 = err, x
+--         if err > y then
+--             i = 255*(err+2*x-1)/r
+--             if i < 255 then
+--                 self:setPixelClampedAA(center_x+x, center_y-y+1, c, 255-i)
+--                 self:setPixelClampedAA(center_x+y-1, center_y+x, c, 255-i)
+--                 self:setPixelClampedAA(center_x-x, center_y+y-1, c, 255-i)
+--                 self:setPixelClampedAA(center_x-y+1, center_y-x, c, 255-i)
+--             end
+--             x = x - 1
+--             err = err - (x*2-1)
+--         end
+--         local x2_temp = x2
+--         x2 = x2 - 1
+--         if e2 <= x2_temp then
+--             i = 255*(1-2*y-e2)/r
+--             if i < 255 then
+--                 self:setPixelClampedAA(center_x+x2, center_y-y, c, 255-i)
+--                 self:setPixelClampedAA(center_x+y, center_y+x2, c, 255-i)
+--                 self:setPixelClampedAA(center_x-x2, center_y+y, c, 255-i)
+--                 self:setPixelClampedAA(center_x-y, center_y-x2, c, 255-i)
+--             end
+--             y = y - 1
+--             err = err - (y*2-1)
+--         end
+--     end
+-- end
+
+function BB_mt.__index:paintEllipseRectAA(x0, y0, x1, y1, c)
+    x0, y0, x1, y1 = floor(x0), floor(y0), floor(x1), floor(y1)
+    local a, b = math.abs(x1-x0), math.abs(y1-y0)
+    local b1 = band(b, 1)
+    local dx, dy = 4*(a-1)*b*b, 4*(b1+1)*a*a
+    local f, ed, i
+    local err = b1*a*a-dx+dy
+
+    if a == 0 or b == 0 then
+        self:paintLineAA(x0, y0, x1, y1, c)
+        return
+    end
+    if x0 > x1 then
+        x0 = x1
+        x1 = x1 + a
+    end
+    if y0 > y1 then
+        y0 = y1
+    end
+    y0 = y0 + rshift(b+1, 1)
+    y1 = y0 - b1
+    a = 8*a*a
+    b1 = 8*b*b
+
     while true do
-        i = 255*math.abs(err+2*(x+y)-2)/r
-        self:setPixelClampedAA(center_x+x, center_y-y, c, 255-i)
-        self:setPixelClampedAA(center_x+y, center_y+x, c, 255-i)
-        self:setPixelClampedAA(center_x-x, center_y+y, c, 255-i)
-        self:setPixelClampedAA(center_x-y, center_y-x, c, 255-i)
-        if x == 0 then break end
-        e2, x2 = err, x
-        if err > y then
-            i = 255*(err+2*x-1)/r
-            if i < 255 then
-                self:setPixelClampedAA(center_x+x, center_y-y+1, c, 255-i)
-                self:setPixelClampedAA(center_x+y-1, center_y+x, c, 255-i)
-                self:setPixelClampedAA(center_x-x, center_y+y-1, c, 255-i)
-                self:setPixelClampedAA(center_x-y+1, center_y-x, c, 255-i)
-            end
-            x = x - 1
-            err = err - (x*2-1)
+        i, ed = math.min(dx, dy), math.max(dx, dy)
+        if y0 == y1+1 and err > dy and a > b1 then
+            ed = 255*4/a
+        else
+            ed = 255/(ed+2*ed*i*i/(4*ed*ed+i*i))
         end
-        local x2_temp = x2
-        x2 = x2 - 1
-        if e2 <= x2_temp then
-            i = 255*(1-2*y-e2)/r
-            if i < 255 then
-                self:setPixelClampedAA(center_x+x2, center_y-y, c, 255-i)
-                self:setPixelClampedAA(center_x+y, center_y+x2, c, 255-i)
-                self:setPixelClampedAA(center_x-x2, center_y+y, c, 255-i)
-                self:setPixelClampedAA(center_x-y, center_y-x2, c, 255-i)
+        i = ed*math.abs(err+dx-dy)
+        self:setPixelClampedAA(x0, y0, c, 255-i)
+        self:setPixelClampedAA(x0, y1, c, 255-i)
+        self:setPixelClampedAA(x1, y0, c, 255-i)
+        self:setPixelClampedAA(x1, y1, c, 255-i)
+        
+        f = (2*err+dy >= 0)
+        if f then
+            if x0 >= x1 then
+                break
             end
-            y = y - 1
-            err = err - (y*2-1)
+            i = ed*(err+dx)
+            if i < 256 then
+                self:setPixelClampedAA(x0, y0+1, c, 255-i)
+                self:setPixelClampedAA(x0, y1-1, c, 255-i)
+                self:setPixelClampedAA(x1, y0+1, c, 255-i)
+                self:setPixelClampedAA(x1, y1-1, c, 255-i)
+            end
+        end
+
+        if 2*err <= dx then
+            i = ed*(dy-err)
+            if i < 256 then
+                self:setPixelClampedAA(x0+1, y0, c, 255-i)
+                self:setPixelClampedAA(x1-1, y0, c, 255-i)
+                self:setPixelClampedAA(x0+1, y1, c, 255-i)
+                self:setPixelClampedAA(x1-1, y1, c, 255-i)
+            end
+            y0 = y0 + 1
+            y1 = y1 - 1
+            dy = dy + a
+            err = err + dy
+        end
+        
+        if f then
+            x0 = x0 + 1
+            x1 = x1 - 1
+            dx = dx - b1
+            err = err - dx
+        end
+    end
+
+    x0 = x0 - 1
+    if x0 == x1 then
+        x1 = x1 + 1
+        while y0-y1 < b do
+            i = 255*4*math.abs(err+dx)/b1
+            y0 = y0 + 1
+            self:setPixelClampedAA(x0, y0, c, 255-i)
+            self:setPixelClampedAA(x1, y0, c, 255-i)
+            y1 = y1 - 1
+            self:setPixelClampedAA(x0, y1, c, 255-i)
+            self:setPixelClampedAA(x1, y1, c, 255-i)
+            dy = dy + a
+            err = err + dy
         end
     end
 end
 
+function BB_mt.__index:paintCircleAA(x0, y0, r, c)
+    self:paintEllipseRectAA(x0 - r, y0 - r, x0 + r, y0 + r, c)
+end
+
+function BB_mt.__index:paintCircleWidth(x0, y0, r, c, th)
+    self:paintEllipseRectWidth(x0 - r, y0 - r, x0 + r, y0 + r, c, th)
+end
+
+function BB_mt.__index:paintEllipseRectWidth(x0, y0, x1, y1, c, th)
+    x0, y0, x1, y1 = floor(x0), floor(y0), floor(x1), floor(y1)
+    local a, b = math.abs(x1-x0), math.abs(y1-y0)
+    local b1 = band(b, 1)
+    local a2, b2 = a-2*th, b-2*th
+    local dx, dy = 4*(a-1)*b*b, 4*(b1-1)*a*a
+    local i = a+b2
+    local err = b1*a*a
+    local dx2, dy2, e2, ed
+
+    if th < 1.5 then
+        return self:paintEllipseRectAA(x0, y0, x1, y1, c)
+    end
+    if (th-1)*(2*b-th) > a*a then
+        b2 = math.sqrt(a*(b-a)*i*a2)/(a-th)
+    end
+    if (th-1)*(2*a-th) > b*b then
+        a2 = math.sqrt(b*(a-b)*i*b2)/(b-th)
+        th = (a-a2)/2
+    end
+    if a == 0 or b == 0 then
+        return self:paintLineAA(x0, y0, x1, y1, c)
+    end
+    if x0 > x1 then
+        x0 = x1
+        x1 = x1 + a
+    end
+    if y0 > y1 then
+        y0 = y1
+    end
+    if b2 <= 0 then
+        th = a
+    end
+
+    e2 = th-math.floor(th)
+    th = x0 + th - e2
+    dx2, dy2 = 4*(a2+2*e2-1)*b2*b2, 4*(b1-1)*a2*a2
+    e2 = dx2*e2
+    y0 = y0 + rshift(b+1, 1)
+    y1 = y0 - b1
+    a, b1 = 8*a*a, 8*b*b
+    a2, b2 = 8*a2*a2, 8*b2*b2
+
+    while x0 < x1 do
+        while true do
+            if err < 0 or x0 > x1 then
+                i = x0
+                break
+            end
+            i, ed = math.min(dx, dy), math.max(dx, dy)
+            if y0 == y1+1 and 2*err > dx and a > b1 then
+                ed = a/4
+            else
+                ed = ed + 2*ed*i*i/(4*ed*ed+i*i+1)+1
+            end
+            i = 255*err/ed
+            self:setPixelClampedAA(x0, y0, c, 255-i)
+            self:setPixelClampedAA(x0, y1, c, 255-i)
+            self:setPixelClampedAA(x1, y0, c, 255-i)
+            self:setPixelClampedAA(x1, y1, c, 255-i)
+            if err+dy+a < dx then
+                i = x0+1
+                break
+            end
+            x0, x1 = x0+1, x1-1
+            err = err - dx
+            dx = dx - b1
+        end
+
+        while i < th and 2*i <= x0+x1 do
+            self:setPixelClamped(i, y0, c)
+            self:setPixelClamped(x0+x1-i, y0, c)
+            self:setPixelClamped(i, y1, c)
+            self:setPixelClamped(x0+x1-i, y1, c)
+            i = i + 1
+        end
+
+        while e2 > 0 and x0+x1 >= 2*th do
+            i, ed = math.min(dx2, dy2), math.max(dx2, dy2)
+            if y0 == y1+1 and 2*e2 > dx2 and a2 > b2 then
+                ed = a2/4
+            else
+                ed = ed + 2*ed*i*i/(4*ed*ed+i*i)
+            end
+            i = 255-255*e2/ed
+            self:setPixelClampedAA(th, y0, c, 255-i)
+            self:setPixelClampedAA(x0+x1-th, y0, c, 255-i)
+            self:setPixelClampedAA(th, y1, c, 255-i)
+            self:setPixelClampedAA(x0+x1-th, y1, c, 255-i)
+            if e2+dy2+a2 < dx2 then
+                break
+            end
+            th = th + 1
+            e2 = e2 - dx2
+            dx2 = dx2 - b2
+        end
+        dy2 = dy2 + a2
+        e2 = e2 + dy2
+        y0, y1 = y0+1, y1-1
+        dy = dy + a
+        err = err + dy
+    end
+
+    if y0-y1 <= b then
+        if err > dy+a then
+            y0, y1 = y0-1, y1+1
+            dy = dy - a
+            err = err - dy
+        end
+        while y0-y1 <= b do
+            i = 255*4*err/b1
+            self:setPixelClampedAA(x0, y0, c, 255-i)
+            self:setPixelClampedAA(x1, y0, c, 255-i)
+            y0 = y0 + 1
+            self:setPixelClampedAA(x0, y1, c, 255-i)
+            self:setPixelClampedAA(x1, y1, c, 255-i)
+            y1 = y1 - 1
+            dy = dy + a
+            err = err + dy
+        end
+    end
+end
 
 function BB_mt.__index:paintRoundedCorner(off_x, off_y, w, h, bw, r, c, anti_alias)
     if 2*r > h or 2*r > w or r == 0 then
