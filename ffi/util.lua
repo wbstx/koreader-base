@@ -60,27 +60,9 @@ int WideCharToMultiByte(
 );
 ]]
 
-local getlibprefix = function()
-    -- Apple M1 homebrew installs libraries outside of default searchpaths,
-    -- and dyld environment variables are sip-protected on MacOS, cf. https://github.com/Homebrew/brew/issues/13481#issuecomment-1181592842
-    local libprefix = os.getenv("KO_DYLD_PREFIX")
-
-    if not libprefix then
-        local std_out = io.popen("brew --prefix", "r")
-            if std_out then
-                libprefix = std_out:read("*line")
-                std_out:close()
-            end
-    end
-
-    return libprefix
-end
-
 require("ffi/posix_h")
 
 local util = {}
-
-util.KO_DYLD_PREFIX = ffi.os == "OSX" and getlibprefix() or ""
 
 if ffi.os == "Windows" then
     util.gettime = function()
@@ -644,21 +626,6 @@ function util.multiByteToUTF8(str, codepage)
     end
 end
 
-function util.ffiLoadCandidates(candidates)
-    local lib_loaded, lib
-
-    for _, candidate in ipairs(candidates) do
-        lib_loaded, lib = pcall(ffi.load, candidate)
-
-        if lib_loaded then
-            return lib
-        end
-    end
-
-    -- we failed, lib is the error message
-    return lib_loaded, lib
-end
-
 local isAndroid = nil
 --- Returns true if Android.
 -- For now, we just check if the "android" module can be loaded.
@@ -673,40 +640,22 @@ function util.isPocketbook()
     return lfs.attributes("/ebrmain/pocketbook")
 end
 
-local haveSDL2 = nil
---- Returns true if SDL2
-function util.haveSDL2()
-    local err
-
-    if haveSDL2 == nil then
-        local candidates
-        if ffi.os == "OSX" then
-            candidates = {"libs/libSDL2.dylib", "SDL2", util.KO_DYLD_PREFIX .. "/lib/libSDL2.dylib"}
-        else
-            candidates = {"SDL2", "libSDL2-2.0.so", "libSDL2-2.0.so.0"}
+local libSDL2 = nil
+--- Returns SDL2 library
+function util.loadSDL2()
+    if libSDL2 == nil then
+        local ok
+        ok, libSDL2 = pcall(ffi.loadlib,
+            "SDL2-2.0", 0,
+            "SDL2-2.0", nil,
+            "SDL2", nil
+        )
+        if not ok then
+            print("SDL2 not loaded:", libSDL2)
+            libSDL2 = false
         end
-        haveSDL2, err = util.ffiLoadCandidates(candidates)
     end
-    if not haveSDL2 then
-        print("SDL2 not loaded:", err)
-    end
-
-    return haveSDL2
-end
-
-local isSDL = nil
---- Returns true if SDL
-function util.isSDL()
-    if isSDL == nil then
-        isSDL = util.haveSDL2()
-    end
-    return isSDL
-end
-
---- Silence the SDL checks (solely for front's frontend/device.lua usage!)
-function util.noSDL()
-    haveSDL2 = false
-    isSDL = false
+    return libSDL2 or nil
 end
 
 --- Division with integer result.
