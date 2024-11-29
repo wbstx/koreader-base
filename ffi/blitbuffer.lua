@@ -2431,62 +2431,6 @@ function BB_mt.__index:paintRoundedRect(x, y, w, h, c, r)
     end
 end
 
-function BB_mt.__index:paintLinePerp(x, y, dx, dy, c, width, x_step, y_step, einit, winit)
-    local steep = math.abs(dy) > math.abs(dx)
-    if steep then
-        x, y = y, x
-        dx, dy = dy, dx
-    end
-
-    local thres = dx - 2 * dy
-    local e_diag = -2 * dx
-    local e_square = 2 * dy
-    local wthr = 2 * width * math.sqrt(dx * dx + dy * dy)
-
-    local tmp_x, tmp_y = x, y
-    local error = einit
-    local tk = dx + dy - winit
-    
-    while tk <= wthr do
-        if steep then
-            self:setPixelClamped(tmp_y, tmp_x, c)
-        else
-            self:setPixelClamped(tmp_x, tmp_y, c)
-        end
-
-        if error > thres then
-            tmp_x = tmp_x + x_step
-            error = error + e_diag
-            tk = tk + 2 * dy
-        end
-        error = error + e_square
-        tmp_y = tmp_y + y_step
-        tk = tk + 2 * dx
-    end
-
-    tmp_x, tmp_y = x, y
-    error = -einit
-    tk = dx + dy + winit
-
-    while tk <= wthr do
-        if steep then
-            self:setPixelClamped(tmp_y, tmp_x, c)
-        else
-            self:setPixelClamped(tmp_x, tmp_y, c)
-        end
-
-        if error > thres then
-            tmp_x = tmp_x - x_step
-            error = error + e_diag
-            tk = tk + 2 * dy
-        end
-        error = error + e_square
-        tmp_y = tmp_y - y_step
-        tk = tk + 2 * dx
-    end
-
-end
-
 --[[
 Bresenham‘s line algorithm to Draw a line with thickness
 Reference: https://zingl.github.io/bresenham.html & http://kt8216.unixcab.org/murphy/index.html
@@ -2498,80 +2442,9 @@ Reference: https://zingl.github.io/bresenham.html & http://kt8216.unixcab.org/mu
 @c:   color of the line
 @width:   thickness of the line
 --]]
-function BB_mt.__index:paintLineDirty(x1, y1, x2, y2, c, width)
-    x1, y1 = ceil(x1), ceil(y1)
-    x2, y2 = ceil(x2), ceil(y2)
-
-    local steep = math.abs(y2 - y1) > math.abs(x2 - x1)
-    if steep then
-        x1, y1 = y1, x1
-        x2, y2 = y2, x2
-    end
-
-    if x1 > x2 then
-        x1, x2 = x2, x1
-        y1, y2 = y2, y1
-    end
-
-    local dx = x2 - x1
-    local dy = y2 - y1
-
-    local y_step = 1
-    if dy < 0 then
-        y_step = -1
-        dy = -dy
-    end
-
-    local error = 0
-    local thres = dx - 2 * dy
-    local e_diag = -2 * dx
-    local e_square = 2 * dy
-
-    local px_step = -1
-    local py_step = -1
-    if y_step < 0 then
-        py_step = -1
-    else
-        py_step = 1
-    end
-
-    local p_error = 0
-    local tmp_y = y1
-    for tmp_x=x1, x2+1, 1 do
-        if steep then
-            self:setPixelClamped(tmp_y, tmp_x, c)
-            if width > 1 then
-                self:paintLinePerp(tmp_y, tmp_x, dy, dx, c, width, px_step, py_step, p_error, error)
-            end
-        else
-            self:setPixelClamped(tmp_x, tmp_y, c)
-            if width > 1 then
-                self:paintLinePerp(tmp_x, tmp_y, dx, dy, c, width, px_step, py_step, p_error, error)
-            end
-        end
-
-        if error >= thres then
-            tmp_y = tmp_y + y_step
-            error = error + e_diag
-            if width > 1 then
-                if p_error > thres then
-                    if steep then
-                        self:paintLinePerp(tmp_y, tmp_x, dy, dx, c, width, px_step, py_step, p_error+e_diag+e_square, error)
-                    else
-                        self:paintLinePerp(tmp_x, tmp_y, dx, dy, c, width, px_step, py_step, p_error+e_diag+e_square, error)
-                    end
-                    p_error = p_error + e_diag
-                end
-                p_error = p_error + e_square
-            end
-        end
-            error = error + e_square
-        tmp_x = tmp_x + 1
-    end
-end
 
 function BB_mt.__index:paintLine(x0, y0, x1, y1, c)
-    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    x0, y0, x1, y1 = floor(x0), floor(y0), floor(x1), floor(y1)
     local dx = math.abs(x1-x0)
     local sx = x0<x1 and 1 or -1
     local dy = -math.abs(y1-y0)
@@ -2594,7 +2467,7 @@ function BB_mt.__index:paintLine(x0, y0, x1, y1, c)
 end
 
 function BB_mt.__index:paintLineAA(x0, y0, x1, y1, c)
-    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    x0, y0, x1, y1 = floor(x0), floor(y0), floor(x1), floor(y1)
     local dx = math.abs(x1-x0)
     local sx = x0 < x1 and 1 or -1
     local dy = math.abs(y1-y0)
@@ -2627,15 +2500,27 @@ function BB_mt.__index:paintLineAA(x0, y0, x1, y1, c)
 end
 
 function BB_mt.__index:paintLineWidth(x0, y0, x1, y1, c, w)
-    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    x0, y0, x1, y1 = floor(x0), floor(y0), floor(x1), floor(y1)
     local dx = math.abs(x1-x0)
     local sx = x0 < x1 and 1 or -1
     local dy = math.abs(y1-y0)
     local sy = y0 < y1 and 1 or -1
+    
+    -- @FIXME aa line has thicker start, it is not a good fix but looks ok
+    -- we will skip the first <start_offset> pixels
+    local start_offset = 0
+    if dx > 255 or dy > 255 then
+        start_offset = floor(math.max(dy / 255.0, dx / 255.0))
+        -- if dy > 255 then
+        --     self:paintLineWidth(x0, y0, x1, y0+start_offset*sy, c, w)
+        -- end
+        -- if dx > 255 then
+        --     self:paintLineWidth(x0, y0, x0+start_offset*sx, y0, c, w)
+        -- end
+    end
     local err
     local e2 = math.sqrt(dx*dx+dy*dy)
 
-    print(w, e2)
     if w <= 1 or e2 == 0 then
         self:paintLineAA(x0, y0, x1, y1, c)
         return
@@ -2651,14 +2536,20 @@ function BB_mt.__index:paintLineWidth(x0, y0, x1, y1, c, w)
         x0 = x0 - x1 * sx
         while true do
             x1 = x0
-            self:setPixelClampedAA(x1, y0, c, 255-err)
+            if start_offset < 0 then
+                self:setPixelClampedAA(x1, y0, c, 255-err)
+            end
             e2 = dy - err - w
             while e2 + dy < 255 do
                 x1 = x1 + sx
-                self:setPixelClamped(x1, y0, c)
+                if start_offset < 0 then
+                    self:setPixelClamped(x1, y0, c)
+                end
                 e2 = e2 + dy
             end
-            self:setPixelClampedAA(x1+sx, y0, c, 255-e2)
+            if start_offset < 0 then
+                self:setPixelClampedAA(x1+sx, y0, c, 255-e2)
+            end
             if y0 == y1 then break end
             err = err + dx
             if err > 255 then
@@ -2666,6 +2557,8 @@ function BB_mt.__index:paintLineWidth(x0, y0, x1, y1, c, w)
                 x0 = x0 + sx
             end
             y0 = y0 + sy
+
+            start_offset = start_offset - 1
         end
     else
         y1 = round((e2+w/2)/dx)
@@ -2693,7 +2586,6 @@ function BB_mt.__index:paintLineWidth(x0, y0, x1, y1, c, w)
 end
 
 function BB_mt.__index:paintQuadRationalBezierWidthSeg(x0, y0, x1, y1, x2, y2, c, weight, width)
-    x0, y0, x1, y1, x2, y2 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2)
     local sx, sy = x2-x1, y2-y1
     local dx, dy = x0-x2, y0-y2
     local xx, yy = x0-x1, y0-y1
@@ -2858,7 +2750,7 @@ function BB_mt.__index:paintQuadRationalBezierWidthSeg(x0, y0, x1, y1, x2, y2, c
 end
 
 function BB_mt.__index:paintQuadRationalBezierWidth(x0, y0, x1, y1, x2, y2, c, weight, width)
-    x0, y0, x1, y1, x2, y2 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2)
+    x0, y0, x1, y1, x2, y2 = floor(x0), floor(y0), floor(x1), floor(y1), floor(x2), floor(y2)
     local x, y = x0-2*x1+x2, y0-2*y1+y2
     local xx, yy = x0-x1, y0-y1
     local ww, t, q
@@ -2925,7 +2817,6 @@ function BB_mt.__index:paintQuadRationalBezierWidth(x0, y0, x1, y1, x2, y2, c, w
 end
 
 function BB_mt.__index:paintCubicBezierSegWidth(x0, y0, x1, y1, x2, y2, x3, y3, c, width)
-    x0, y0, x1, y1, x2, y2, x3, y3 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2), round(x3), round(y3)
     local x = math.floor((x0+3*x1+3*x2+x3+4)/8)
     local y = math.floor((y0+3*y1+3*y2+y3+4)/8)
     self:paintQuadRationalBezierWidthSeg(x0, y0, math.floor((x0+3*x1+2)/4), math.floor((y0+3*y1+2)/4), x, y, c, 1, width)
@@ -2933,7 +2824,7 @@ function BB_mt.__index:paintCubicBezierSegWidth(x0, y0, x1, y1, x2, y2, x3, y3, 
 end
 
 function BB_mt.__index:paintCubicBezierWidth(x0, y0, x1, y1, x2, y2, x3, y3, c, width)
-    x0, y0, x1, y1, x2, y2, x3, y3 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2), round(x3), round(y3)
+    x0, y0, x1, y1, x2, y2, x3, y3 = floor(x0), floor(y0), floor(x1), floor(y1), floor(x2), floor(y2), floor(x3), floor(y3)
     local n, i = 1, 0
     local xc = x0+x1-x2-x3
     local xa = xc-4*(x1-x2)
@@ -3172,7 +3063,7 @@ function BB_mt.__index:paintQuadBezierSeg(x0, y0, x1, y1, x2, y2, c, w)
 end
 
 function BB_mt.__index:paintQuadBezier(x0, y0, x1, y1, x2, y2, c, w)
-    x0, y0, x1, y1, x2, y2 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2)
+    x0, y0, x1, y1, x2, y2 = floor(x0), floor(y0), floor(x1), floor(y1), floor(x2), floor(y2)
 
     local x = x0-x1
     local y = y0-y1
@@ -3316,7 +3207,7 @@ function BB_mt.__index:paintCubicBezierSeg(x0, y0, x1, y1, x2, y2, x3, y3, c, w)
 end
 
 function BB_mt.__index:paintCubicBezier(x0, y0, x1, y1, x2, y2, x3, y3, c, w)
-    x0, y0, x1, y1, x2, y2, x3, y3 = round(x0), round(y0), round(x1), round(y1), round(x2), round(y2), round(x3), round(y3)
+    x0, y0, x1, y1, x2, y2, x3, y3 = floor(x0), floor(y0), floor(x1), floor(y1), floor(x2), floor(y2), floor(x3), floor(y3)
     local n, i = 1, 0
     local xc = x0+x1-x2-x3
     local xa = xc-4*(x1-x2)
